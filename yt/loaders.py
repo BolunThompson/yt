@@ -978,8 +978,14 @@ def load_octree(
         raise TypeError("octree_mask should be a Numpy array with type uint8")
 
     nz = num_zones
-    # for compatibility
     if over_refine_factor is not None:
+        warnings.warn(
+            (
+                "over_refine_factor is deprecated and will be removed in version 4.2. "
+                "Instead, num_zones can be specified (num_zones=over_refine_factor << 1)"
+            ),
+            DeprecationWarning,
+        )
         nz = 1 << over_refine_factor
     domain_dimensions = np.array([nz, nz, nz])
     nprocs = 1

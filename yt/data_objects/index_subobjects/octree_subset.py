@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from itertools import product, repeat
 from typing import Tuple
+import warnings
 
 import numpy as np
 from unyt import unyt_array
@@ -43,9 +44,26 @@ class OctreeSubset(YTSelectionContainer):
     _cell_count = -1
     _block_order = "C"
 
-    def __init__(self, base_region, domain, ds, num_zones=2, num_ghost_zones=0):
+    def __init__(
+        self,
+        base_region,
+        domain,
+        ds,
+        num_zones=2,
+        num_ghost_zones=0,
+        over_refine_factor=None,
+    ):
         super().__init__(ds, None)
         self._num_zones = num_zones
+        if over_refine_factor is not None:
+            warnings.warn(
+                (
+                    "over_refine_factor is deprecated and will be removed in version 4.2. "
+                    "Instead, num_zones can be specified (num_zones=over_refine_factor << 1)"
+                ),
+                DeprecationWarning,
+            )
+            self._num_zones = over_refine_factor << 1
         self._num_ghost_zones = num_ghost_zones
         self.domain = domain
         self.domain_id = domain.domain_id
