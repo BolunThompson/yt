@@ -1136,6 +1136,40 @@ cdef class EnzoEOctreeContainer(SparseOctreeContainer):
             cur.file_ind = p
         return cont.n_assigned - initial + nb
 
+    def finalize(self):
+        cdef size_t new_size
+        cdef OctAllocationContainer *cont
+        super().finalize()
+        for i in range(len(self.domains)):
+            cont = self.domains.get_cont(i)
+            if (cont.n - 1) > cont.n_assigned:
+                new_size = cont.n_assigned + 1
+                cont.my_objs = <Oct*> realloc(cont.my_objs, new_size)
+                cont.n = new_size
+
+    cdef Oct* next_child(self, int domain_id, int ind[3], Oct *parent) except? NULL:
+        cdef int i
+        cdef Oct *next = NULL
+        cdef np.uint64_t new_size
+        if parent.children != NULL:
+            next = parent.children[cind(ind[0],ind[1],ind[2])]
+        else:
+            # This *8 does NOT need to be made generic.
+            parent.children = <Oct **> malloc(sizeof(Oct *) * 8)
+            for i in range(8):
+                parent.children[i] = NULL
+        if next != NULL: return next
+        cdef OctAllocationContainer *cont = self.domains.get_cont(domain_id - 1)
+        if cont.n_assigned >= cont.n:
+            new_size = <np.uint64_t> (cont.n * 1.15)
+            cont.my_objs = <Oct*> realloc(cont.my_objs, <size_t> new_size)
+            cont.n = new_size
+        next = &cont.my_objs[cont.n_assigned]
+        cont.n_assigned += 1
+        parent.children[cind(ind[0],ind[1],ind[2])] = next
+        self.nocts += 1
+        return next
+
 cdef OctList *OctList_subneighbor_find(OctList *olist, Oct *top,
                                        int i, int j, int k):
     if top.children == NULL: return olist
