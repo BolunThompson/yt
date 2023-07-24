@@ -45,41 +45,43 @@ else:
 
 class EnzoEDomainFile:
     # equivalent to a block list file
+
+    num_domains: ClassVar[int] = 0
+
     ds: EnzoEOctreeDataset
-    index: EnzoEOctreeHierarchy
-    nocts: int
-    h5fname: str
-    min_level: int
-    cell_count: int
-    levels: np.ndarray
-    file_inds: list[np.ndarray]
     oct_handler: EnzoEOctreeContainer
+
+    levels: list[np.ndarray]
+    file_inds: list[np.ndarray]
+
+    nocts: int
+    cell_count: int
+
+    h5fname: str
     block_inds: list[str]
+    domain_id: int  # 1-indexed
 
     def __init__(
         self,
-        ds: EnzoEOctreeDataset,
-        oct_handler: EnzoEOctreeContainer,
-        bnames: Collection[str],
-        h5fname: str,
-        block_inds: list[str],
+        index: EnzoEOctreeHierarchy,
+        domain_data: RawBlockList,
         levels: np.ndarray,
         file_inds: np.ndarray,
-        domain_id: int,
     ) -> None:
-        self.ds = ds
-        self.oct_handler = oct_handler
+        self.ds = index.ds
+        self.oct_handler = index.oct_handler
 
+        self.file_inds = file_inds
         self.levels = levels
+
         self.nocts = sum(len(levels) for levels in levels)
         self.cell_count = self.ds.cells_per_oct * self.nocts
 
-        self.levels = levels
+        self.h5fname = domain_data.h5fname
+        self.block_inds = domain_data.keys
 
-        self.h5fname = h5fname
-        self.domain_id = domain_id
-        self.file_inds = file_inds
-        self.block_inds = block_inds
+        EnzoEDomainFile.num_domains += 1
+        self.domain_id = EnzoEDomainFile.num_domains
 
     def init_octs(self):
         # The order of the blocks in the levels array doesn't matter
@@ -100,11 +102,11 @@ class EnzoEDomainFile:
 
 
 class EnzoEOctreeHierarchy(OctreeIndex):
-    max_level: int
-    min_level: int
-    domains: list[EnzoEDomainFile]
     comm: Any
+    max_level: int
     oct_handler: EnzoEOctreeContainer
+
+    domains: list[EnzoEDomainFile]
 
     def __init__(self, ds, dataset_type="enzo_e_octree"):
         self.dataset_type = dataset_type
@@ -132,7 +134,6 @@ class EnzoEOctreeHierarchy(OctreeIndex):
 
     def _initialize_oct_handler(self) -> None:
         self.max_level = self.ds.max_level
-        self.min_level = self.ds.min_level
 
         self.oct_handler = EnzoEOctreeContainer(
             self.ds.domain_dimensions // self.ds.nz,
@@ -144,31 +145,20 @@ class EnzoEOctreeHierarchy(OctreeIndex):
         domains: list[EnzoEDomainFile] = []
         self.domains = domains
         # Numpy str methods might be able to be used to speed this up
-        for i, dom in enumerate(self.ds.domain_blocks, 1):
+        for dom in self.ds.domain_blocks:
             levels: list[list[np.ndarray]] = [[] for _ in range(self.max_level + 1)]
             file_inds: list[list[int]] = [[] for _ in range(self.max_level + 1)]
 
             for bname in dom.bnames:
                 pos, level = block_pos(bname, -self.ds.min_level)
-                if pos is not None and self.max_level >= level >= 0:
-                    levels[level].append(pos)
-                    file_inds[level].append(dom.key_inds[bname])
+                if pos is not None and self.max_level >= level >= 0:  # type: ignore
+                    levels[level].append(pos)  # type: ignore
+                    file_inds[level].append(dom.key_inds[bname])  # type: ignore
 
             np_levels = [np.asarray(lvl) for lvl in levels]
             np_file_inds = [np.asarray(lvl) for lvl in file_inds]
 
-            domains.append(
-                EnzoEDomainFile(
-                    self.ds,
-                    self.oct_handler,
-                    dom.bnames,
-                    dom.h5fname,
-                    dom.keys,
-                    np_levels,
-                    np_file_inds,
-                    i,
-                )
-            )
+            domains.append(EnzoEDomainFile(self, dom, np_levels, np_file_inds))
 
         nocts = [dom.nocts for dom in domains]
         self.num_grids = sum(nocts)
@@ -442,6 +432,8 @@ class EnzoEOctreeDataset(Dataset):
     _suffixes = (".file_list", ".block_list")
     particle_types: tuple[str, ...] = ()
     particle_types_raw = None
+    index: EnzoEOctreeHierarchy
+
     domain_blocks: list[RawBlockList]
     min_level: int
     max_level: int
@@ -450,7 +442,6 @@ class EnzoEOctreeDataset(Dataset):
     cells_per_oct: int
     dimensionality: int
     base_slice: tuple[slice, ...]
-    index: EnzoEOctreeHierarchy
 
     def __init__(
         self,
