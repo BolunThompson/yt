@@ -2,7 +2,6 @@ from __future__ import annotations  # noqa: I001
 
 import os
 from collections.abc import Collection, Iterator
-from itertools import accumulate
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import numpy as np
@@ -17,6 +16,7 @@ from yt.frontends.enzo_e_octree.misc import (
     bname_from_pos,
     get_bf_path,
     get_block_info,
+    get_h5_keys,
     get_listed_subparam,
     get_min_level,
     get_root_blocks,
@@ -52,9 +52,9 @@ class EnzoEDomainFile:
     min_level: int
     cell_count: int
     levels: np.ndarray
-    level_counts: list[int]
-    level_inds: list[int]
+    file_inds: list[np.ndarray]
     oct_handler: EnzoEOctreeContainer
+    block_inds: list[str]
 
     def __init__(
         self,
@@ -62,8 +62,9 @@ class EnzoEDomainFile:
         oct_handler: EnzoEOctreeContainer,
         bnames: Collection[str],
         h5fname: str,
+        block_inds: list[str],
         levels: np.ndarray,
-        level_counts: list[int],
+        file_inds: np.ndarray,
         domain_id: int,
     ) -> None:
         self.ds = ds
@@ -73,26 +74,22 @@ class EnzoEDomainFile:
         self.nocts = sum(len(levels) for levels in levels)
         self.cell_count = self.ds.cells_per_oct * self.nocts
 
-        self.level_counts = level_counts
-        self.level_inds = list(accumulate(level_counts))
         self.levels = levels
 
         self.h5fname = h5fname
         self.domain_id = domain_id
+        self.file_inds = file_inds
+        self.block_inds = block_inds
 
     def init_octs(self):
         # The order of the blocks in the levels array doesn't matter
         # but it has to stay consistent between the levels array
         # and when it is added
-        offset = 0
-        for i, level in enumerate(self.levels):
+        for i, (level, fi) in enumerate(zip(self.levels, self.file_inds)):
             # This domain does not contain further refined levels
             if level.size == 0:
                 break
-            self.oct_handler.add(
-                self.domain_id, i, level[:, 3:], level[:, :3], file_ind_offset=offset
-            )
-            offset += len(level)
+            self.oct_handler.add(self.domain_id, i, level[:, 3:], level[:, :3], fi)
 
     def included(self, selector) -> bool:
         if getattr(selector, "domain_ind", None) is not None:
@@ -149,13 +146,16 @@ class EnzoEOctreeHierarchy(OctreeIndex):
         # Numpy str methods might be able to be used to speed this up
         for i, dom in enumerate(self.ds.domain_blocks, 1):
             levels: list[list[np.ndarray]] = [[] for _ in range(self.max_level + 1)]
+            file_inds: list[list[int]] = [[] for _ in range(self.max_level + 1)]
+
             for bname in dom.bnames:
                 pos, level = block_pos(bname, -self.ds.min_level)
                 if pos is not None and self.max_level >= level >= 0:
                     levels[level].append(pos)
-            np_levels = [np.asarray(lvl) for lvl in levels]
+                    file_inds[level].append(dom.key_inds[bname])
 
-            level_inds = [len(lvl) for lvl in levels]
+            np_levels = [np.asarray(lvl) for lvl in levels]
+            np_file_inds = [np.asarray(lvl) for lvl in file_inds]
 
             domains.append(
                 EnzoEDomainFile(
@@ -163,8 +163,9 @@ class EnzoEOctreeHierarchy(OctreeIndex):
                     self.oct_handler,
                     dom.bnames,
                     dom.h5fname,
+                    dom.keys,
                     np_levels,
-                    level_inds,
+                    np_file_inds,
                     i,
                 )
             )
@@ -319,7 +320,7 @@ class EnzoESubset(OctreeSubset):
     # From my understanding, the Enzo-E block names are in xyz order,
     # and are sorted in the block list according to c ordering.
     # But the data actually expects to be loaded in fortran order.
-    # This leads to axis_order being ('z', 'y', 'x'), the reverses, and the transposes
+    # This leads to axis_order being ('z', 'y', 'x') and the reverses
     def _fill_no_ghostzones(
         self, f: h5py.File, fields: Collection[str], selector
     ) -> dict[str, np.ndarray]:
@@ -356,10 +357,11 @@ class EnzoESubset(OctreeSubset):
         for oii in oct_inds_i:
             lvl = levels[oii]
             fi = file_inds[oii]
-            fi_offset = self.domain.level_inds[lvl - 1] if lvl > 0 else 0
 
-            bname = self.ds.bname_from_pos(self.domain.levels[lvl][fi - fi_offset], lvl)
+            bname = self.domain.block_inds[fi]
             field_data = f[bname]
+
+            oct_cell_inds = cell_inds[file_inds == fi]
 
             for field in fields:
                 fname = f"field_{field[1]}"
@@ -378,7 +380,6 @@ class EnzoESubset(OctreeSubset):
                     if nzd != self.nz:
                         data = np.repeat(data, self.nz // nzd, axis=ic)
 
-                oct_cell_inds = cell_inds[file_inds == fi]
                 src[field][fi, oct_cell_inds] = data.T.ravel()[oct_cell_inds]
 
         for lvl in range(self.ds.max_level + 1):
@@ -426,6 +427,8 @@ class EnzoESubset(OctreeSubset):
 class RawBlockList(NamedTuple):
     bnames: list[str]
     h5fname: str
+    keys: list[str]
+    key_inds: dict[str, int]
 
 
 class EnzoEOctreeDataset(Dataset):
@@ -489,12 +492,14 @@ class EnzoEOctreeDataset(Dataset):
             with open(get_bf_path(filename, "block_list")) as f:
                 bname, data_fname = next(f).strip().split()
                 data_fname = f"{basedir}/{data_fname}"
-                domain_blocks.append(RawBlockList([bname], data_fname))
+                keys, key_dict = get_h5_keys(data_fname)
+                domain_blocks.append(RawBlockList([bname], data_fname, keys, key_dict))
                 for line in f:
                     bname, dfname = line.split()
                     dfname = f"{basedir}/{dfname}"
                     if data_fname != dfname:
-                        domain_blocks.append(RawBlockList([], dfname))
+                        keys, key_dict = get_h5_keys(dfname)
+                        domain_blocks.append(RawBlockList([], dfname, keys, key_dict))
                         data_fname = dfname
                     domain_blocks[-1].bnames.append(bname)
         else:
@@ -502,8 +507,11 @@ class EnzoEOctreeDataset(Dataset):
             for fname in block_fnames[1:]:
                 blfname = get_bf_path(fname, "block_list")
                 h5fname = get_bf_path(fname, "h5")
+                keys, key_dict = get_h5_keys(dfname)
                 with open(blfname) as f:
-                    domain_blocks.append(RawBlockList(f.readlines(), h5fname))
+                    domain_blocks.append(
+                        RawBlockList(f.readlines(), h5fname, keys, key_dict)
+                    )
         domain_blocks.sort(key=lambda v: int(remove_ext(v.h5fname)[-2:]))
         self.num_domains = len(domain_blocks)
 
@@ -603,7 +611,7 @@ class EnzoEOctreeDataset(Dataset):
         self.grid_dimensions = ablock.attrs["enzo_GridDimension"]
 
         field = next(iter(ablock.values()))
-        cell_dims = np.full(3, 1, dtype=np.uint8)
+        cell_dims = np.ones(3, dtype=np.uint8)
         for i, sh in enumerate(field[self.base_slice].shape):
             cell_dims[i] = sh
         max_dim = max(cell_dims)
@@ -622,7 +630,7 @@ class EnzoEOctreeDataset(Dataset):
                 self.domain_blocks[0].bnames[0], min_dim=self.dimensionality
             )
             * self.nz
-        )
+        )[::-1]
         if self.dimensionality == 2:
             self.domain_dimensions = np.append(self.domain_dimensions, self.nz)
 

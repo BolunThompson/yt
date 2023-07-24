@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
     ParticleFields: TypeAlias = dict[str, list[str]]
     ParticleDataDict: TypeAlias = dict[tuple[str, str], np.ndarray]
-    ParticleData: TypeAlias = tuple[tuple[str, str], np.ndarray]
 
 if sys.version_info < (3, 10):
     from yt._maintenance.backports import zip
@@ -156,29 +155,3 @@ class EnzoEIOHandler(BaseIOHandler):
                 zip(*(cf.values() for cf in chunk_fields), strict=True),
             )
         }
-
-    def _read_obj_field(self, obj, field, fid_data):
-        if fid_data is None:
-            fid_data = (None, None)
-        fid, rdata = fid_data
-        if fid is None:
-            close = True
-            fid = h5py.h5f.open(obj.filename.encode("latin-1"), h5py.h5f.ACC_RDONLY)
-        else:
-            close = False
-        ftype, fname = field
-        node = f"/{obj.block_name}/field{self._sep}{fname}"
-        dg = h5py.h5d.open(fid, node.encode("latin-1"))
-        if rdata is None:
-            rdata = np.empty(
-                self.ds.grid_dimensions[: self.ds.dimensionality][::-1],
-                dtype=self._field_dtype,
-            )
-        dg.read(h5py.h5s.ALL, h5py.h5s.ALL, rdata)
-        if close:
-            fid.close()
-        data = rdata[self._base].T
-        if self.ds.dimensionality < 3:
-            nshape = data.shape + (1,) * (3 - self.ds.dimensionality)
-            data = np.reshape(data, nshape)
-        return data

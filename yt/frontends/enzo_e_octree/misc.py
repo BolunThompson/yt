@@ -6,6 +6,8 @@ from typing import Union
 import numpy as np
 from more_itertools import always_iterable
 
+from yt.utilities.on_demand_imports import _h5py as h5py
+
 
 def bdecode(block):
     """
@@ -199,22 +201,6 @@ def bname_from_pos(
     return f"B{bstr}"
 
 
-# # https://docs.python.org/3/library/string.html#formatspec
-# def bname_from_xyz(xyz: Sequence[int], level: int, min_l: int, dim: int = 3) -> str:
-#     # assert min_l <= 0
-#     bnames: list[str] = []
-#     rl = -min_l  # root level
-#     cl = level  # child level
-#     for j in xyz[:dim]:
-#         root = j >> cl
-#         bstr = f"{root:0{rl}b}"
-#         if cl > 0:
-#             child = j & (~(~1 << (cl - 1)))
-#             bstr += f":{child:0{cl}b}"
-#         bnames.append(bstr)
-#     return f"B{'_'.join(bnames)}"
-
-
 def remove_ext(fname: str) -> str:
     return fname[: fname.rfind(".")]
 
@@ -231,3 +217,10 @@ def get_min_level(bnames: Sequence[str]) -> int:
 def get_bf_path(bfn: str, ext: str):
     bfn = remove_ext(bfn.strip())
     return f"{bfn}.{ext}"
+
+
+def get_h5_keys(h5fname: str) -> tuple[list[int], dict[str, int]]:
+    with h5py.File(h5fname) as f:
+        keys = list(f.keys())
+        key_dict = {k: i for i, k in enumerate(keys)}
+    return keys, key_dict
