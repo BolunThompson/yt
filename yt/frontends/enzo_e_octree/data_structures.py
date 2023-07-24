@@ -45,9 +45,6 @@ else:
 
 class EnzoEDomainFile:
     # equivalent to a block list file
-
-    num_domains: ClassVar[int] = 0
-
     ds: EnzoEOctreeDataset
     oct_handler: EnzoEOctreeContainer
 
@@ -67,6 +64,7 @@ class EnzoEDomainFile:
         domain_data: RawBlockList,
         levels: np.ndarray,
         file_inds: np.ndarray,
+        domain_id: int,
     ) -> None:
         self.ds = index.ds
         self.oct_handler = index.oct_handler
@@ -80,8 +78,7 @@ class EnzoEDomainFile:
         self.h5fname = domain_data.h5fname
         self.block_inds = domain_data.keys
 
-        EnzoEDomainFile.num_domains += 1
-        self.domain_id = EnzoEDomainFile.num_domains
+        self.domain_id = domain_id
 
     def init_octs(self):
         # The order of the blocks in the levels array doesn't matter
@@ -145,7 +142,7 @@ class EnzoEOctreeHierarchy(OctreeIndex):
         domains: list[EnzoEDomainFile] = []
         self.domains = domains
         # Numpy str methods might be able to be used to speed this up
-        for dom in self.ds.domain_blocks:
+        for i, dom in enumerate(self.ds.domain_blocks, 1):
             levels: list[list[np.ndarray]] = [[] for _ in range(self.max_level + 1)]
             file_inds: list[list[int]] = [[] for _ in range(self.max_level + 1)]
 
@@ -158,7 +155,7 @@ class EnzoEOctreeHierarchy(OctreeIndex):
             np_levels = [np.asarray(lvl) for lvl in levels]
             np_file_inds = [np.asarray(lvl) for lvl in file_inds]
 
-            domains.append(EnzoEDomainFile(self, dom, np_levels, np_file_inds))
+            domains.append(EnzoEDomainFile(self, dom, np_levels, np_file_inds, i))
 
         nocts = [dom.nocts for dom in domains]
         self.num_grids = sum(nocts)
