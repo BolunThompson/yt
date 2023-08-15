@@ -632,7 +632,7 @@ class RAMSESIndex(OctreeIndex):
                 level * self.dataset.dimensionality
             )
         for level in range(self.max_level + 1):
-            self.level_stats[level + self.dataset.min_level + 1]["numcells"] = levels[
+            self.level_stats[level + self.dataset.min_level]["numcells"] = levels[
                 :, level
             ].sum()
 

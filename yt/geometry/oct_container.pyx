@@ -1110,9 +1110,10 @@ cdef class EnzoEOctreeContainer(SparseOctreeContainer):
     def add(self, int curdom, int curlevel,
             np.ndarray[np.uint64_t, ndim=2] ipos,
             np.ndarray[np.uint64_t, ndim=2] root_pos,
+            np.ndarray[np.int64_t, ndim=1] file_inds,
             int skip_boundary = 1,
             int count_boundary = 0,
-            int file_ind_offset = 0):
+            ):
         cdef int no, p
         cdef int ind[3]
         cdef np.uint64_t cind[3]
@@ -1156,8 +1157,7 @@ cdef class EnzoEOctreeContainer(SparseOctreeContainer):
                 cind[2] = cind[2] >> 1
             # Now we should be at the right level
             cur.domain = curdom
-            cur.file_ind = p + file_ind_offset
-            print(cur.file_ind)
+            cur.file_ind = file_inds[p]
         return cont.n_assigned - initial + nb
 
 cdef OctList *OctList_subneighbor_find(OctList *olist, Oct *top,
